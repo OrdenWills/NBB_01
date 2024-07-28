@@ -226,7 +226,7 @@ def add_product():
                 image_urls.append(result['secure_url'])
 
         new_product = Product(
-            vendor_id=current_user.id,
+            user_id=current_user.id,
             name=name,
             description=description,
             price=float(price),

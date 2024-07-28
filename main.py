@@ -204,10 +204,12 @@ def some_protected_route():
 @app.route('/api/add-products', methods=['POST'])
 @login_required
 def add_product():
+    
     try:
         # Ensure the user is a vendor (you may need to adjust this based on your user model)
         if not current_user.is_vendor:
-            return jsonify({"error": "Only vendors can add products"}), 403
+            current_user.is_vendor = True
+            # return jsonify({"error": "Only vendors can add products"}), 403
 
         name = request.form.get('name')
         description = request.form.get('description')
@@ -232,8 +234,7 @@ def add_product():
             category=category,
             subcategory=subcategory
         )
-        if not current_user.is_vendor:
-            current_user.is_vendor = True
+        
 
         db.session.add(new_product)
         db.session.commit()

@@ -9,6 +9,7 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 
 from forms import RegisterForm, LoginForm  # Your forms.py 
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import func
 from sqlalchemy.orm import relationship
 import os
 
@@ -199,7 +200,7 @@ def some_protected_route():
     user = User.query.get(current_user_id)
     return jsonify({"user_id": user.id})
 
-# Products API Endpoints
+########################### Products API Endpoints ########################
 
 @app.route('/api/add-products', methods=['POST'])
 @login_required
@@ -244,26 +245,18 @@ def add_product():
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+    
+@app.route('/api/products/trending')
+def get_trending_products():
+    # Placeholder: return some random products as trending
+    products = Product.query.order_by(func.random()).limit(10).all()
+    return jsonify({'products': [product.to_dict() for product in products]})
 
-@app.route('/api/become-full-time-vendor', methods=['POST'])
-@login_required
-def become_full_time_vendor():
-    data = request.json
-    business_name = data.get('business_name')
-
-    if not business_name:
-        return jsonify({"error": "Business name is required"}), 400
-
-    if not current_user.vendor_info:
-        vendor_info = VendorInfo(user_id=current_user.id, business_name=business_name)
-        db.session.add(vendor_info)
-    else:
-        current_user.vendor_info.business_name = business_name
-
-    current_user.is_vendor = True
-    db.session.commit()
-
-    return jsonify({"message": "Successfully registered as a full-time vendor"}), 200
+@app.route('/api/products/promoted')
+def get_promoted_products():
+    # Placeholder: return some random products as promoted
+    products = Product.query.order_by(func.random()).limit(10).all()
+    return jsonify({'products': [product.to_dict() for product in products]})
 
 @app.route('/api/products')
 def get_products():
@@ -286,7 +279,28 @@ def get_product(product_id):
     else:
         return jsonify({"error": "Product not found"}), 404
 
-# Vendor handling (locations and details)
+
+######################### Vendor handling (locations and details)
+@app.route('/api/become-full-time-vendor', methods=['POST'])
+@login_required
+def become_full_time_vendor():
+    data = request.json
+    business_name = data.get('business_name')
+
+    if not business_name:
+        return jsonify({"error": "Business name is required"}), 400
+
+    if not current_user.vendor_info:
+        vendor_info = VendorInfo(user_id=current_user.id, business_name=business_name)
+        db.session.add(vendor_info)
+    else:
+        current_user.vendor_info.business_name = business_name
+
+    current_user.is_vendor = True
+    db.session.commit()
+
+    return jsonify({"message": "Successfully registered as a full-time vendor"}), 200
+
 
 @app.route('/api/vendors/locations') 
 def get_vendor_locations():

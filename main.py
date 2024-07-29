@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, abort
+from flask import Flask, render_template, request, jsonify, redirect, url_for, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,8 +7,6 @@ from flask_caching import Cache
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 
-from forms import RegisterForm, LoginForm  # Your forms.py 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy import func
 from sqlalchemy.orm import relationship
 import os
@@ -64,7 +62,8 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(100), nullable=False)
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
-    is_vendor = db.Column(db.Boolean, default=False)
+    is_full_time_vendor = db.Column(db.Boolean, default=False)
+    products = relationship("Product", back_populates="user")
     vendor_info = relationship("VendorInfo", uselist=False, back_populates="user")
 
 
@@ -97,7 +96,9 @@ class Product(db.Model):
             'description': self.description,
             'price': self.price,
             'images': self.images,
-            'category': self.category
+            'category': self.category,
+            'seller_type': 'Vendor' if self.user.is_full_time_vendor else 'Individual',
+            'business_name': self.user.vendor_info.business_name if self.user.is_full_time_vendor else None
         }
 
 class Chat(db.Model):
@@ -178,6 +179,7 @@ def login():
     if not user or not check_password_hash(user.password, password):
         return jsonify({"error": "Invalid email or password. Please try again."}), 401 
     else:
+        login_user(user)
         access_token = create_access_token(identity=user.id)
         return jsonify({
             "message": "Login successful!",
@@ -207,11 +209,7 @@ def some_protected_route():
 def add_product():
     
     try:
-        # Ensure the user is a vendor (you may need to adjust this based on your user model)
-        if not current_user.is_vendor:
-            current_user.is_vendor = True
-            # return jsonify({"error": "Only vendors can add products"}), 403
-
+        # Get form details
         name = request.form.get('name')
         description = request.form.get('description')
         price = request.form.get('price')
@@ -302,39 +300,48 @@ def become_full_time_vendor():
     return jsonify({"message": "Successfully registered as a full-time vendor"}), 200
 
 
-@app.route('/api/vendors/locations') 
+@app.route('/api/vendors/locations')
 def get_vendor_locations():
-    vendors = Vendor.query.all() 
+    # Query for users who have posted products
+    users_with_products = db.session.query(User).join(Product).filter(Product.user_id == User.id).distinct().all()
 
-    vendor_locations = [
-        {
-            'id': vendor.id,
-            'latitude': vendor.latitude,
-            'longitude': vendor.longitude,
-            'category': vendor.category,
-            'name': vendor.name
+    vendor_locations = []
+    for user in users_with_products:
+        products_info = []
+        for product in user.products:
+            products_info.append({
+                'id': product.id,
+                'name': product.name,
+                'category': product.category,
+                'price': float(product.price),
+                'image': product.images[0] if product.images else None  # Assuming images is a list
+            })
+
+        vendor_info = {
+            'id': user.id,
+            'latitude': user.latitude,
+            'longitude': user.longitude,
+            'name': user.vendor_info.business_name if user.is_full_time_vendor else "Individual",
+            'is_full_time_vendor': user.is_full_time_vendor,
+            'products': products_info
         }
-        for vendor in vendors
-    ]
-    return jsonify(vendor_locations)
+        vendor_locations.append(vendor_info)
 
-@app.route('/api/vendors/<int:vendor_id>')
-def get_vendor(vendor_id):
-    vendor = Vendor.query.get(vendor_id)
-    if vendor:
+    return jsonify(vendor_locations)
+   
+
+@app.route('/api/vendors/<int:user_id>')
+def get_vendor(user_id):
+    user = User.query.get(user_id)
+    if user:
         return jsonify({
-            'id': vendor.id,
-            'name': vendor.name,
-            'email': vendor.email,
-            'phone': vendor.phone,
-            'location': vendor.location,
-            'latitude': vendor.latitude,
-            'longitude': vendor.longitude
+            'id': user.id,
+            'username': user.username,
+            'is_full_time_vendor': user.is_full_time_vendor,
+            'business_name': user.vendor_info.business_name if user.is_full_time_vendor else None
         })
     else:
-        return jsonify({"error": "Vendor not found"}), 404
-
-# ... (Your existing code for admin-only routes) ...
+        return jsonify({"error": "User not found"}), 404
 
 # Chat API Endpoints
 
@@ -366,6 +373,29 @@ def create_chat():
     db.session.add(new_chat)
     db.session.commit()
     return jsonify({"chat_id": new_chat.id}), 201
+
+@app.route('/api/get-chats', methods=['GET'])
+@login_required
+def get_user_chats():
+    user_chats = Chat.query.filter(
+        (Chat.user1_id == current_user.id) | (Chat.user2_id == current_user.id)
+    ).all()
+    
+    chat_list = []
+    for chat in user_chats:
+        other_user = chat.user2 if chat.user1_id == current_user.id else chat.user1
+        last_message = Message.query.filter_by(chat_id=chat.id).order_by(Message.timestamp.desc()).first()
+        
+        chat_info = {
+            'chat_id': chat.id,
+            'other_user_id': other_user.id,
+            'other_user_name': other_user.username,
+            'last_message': last_message.text if last_message else '',
+            'last_message_time': last_message.timestamp.isoformat() if last_message else None
+        }
+        chat_list.append(chat_info)
+    
+    return jsonify(chat_list)
 
 @app.route('/api/chats/<int:chat_id>/messages', methods=['GET'])
 @login_required

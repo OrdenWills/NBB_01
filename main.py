@@ -63,31 +63,28 @@ class User(UserMixin, db.Model):
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     is_full_time_vendor = db.Column(db.Boolean, default=False)
-    products = relationship("Product", back_populates="user")
-    vendor_info = relationship("VendorInfo", uselist=False, back_populates="user")
-
-
+    products = relationship("Product", back_populates="user", cascade="all, delete-orphan")
+    vendor_info = relationship("VendorInfo", uselist=False, back_populates="user", cascade="all, delete-orphan")
 
 class VendorInfo(db.Model):
     __tablename__ = "vendor_info"
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True)
     business_name = db.Column(db.String(255))
-    # Other vendor-specific fields
     user = relationship("User", back_populates="vendor_info")
 
 class Product(db.Model):
     __tablename__ = "products"
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    user = relationship("User", backref="products")
+    user = relationship("User", back_populates="products")
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=False)
     price = db.Column(db.Float, nullable=False)
     images = db.Column(db.JSON, nullable=False)
     category = db.Column(db.String(50), nullable=False)
     subcategory = db.Column(db.String(50))
-    # ... (You might add more product fields here) ...
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -108,14 +105,13 @@ class Chat(db.Model):
     user2_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     user1 = relationship("User", foreign_keys=[user1_id], backref="chats_as_user1")
     user2 = relationship("User", foreign_keys=[user2_id], backref="chats_as_user2")
-    # ... (You might add more chat fields here) ...
 
 class Message(db.Model):
     __tablename__ = "messages"
     id = db.Column(db.Integer, primary_key=True)
     chat_id = db.Column(db.Integer, db.ForeignKey("chats.id"), nullable=False)
     chat = relationship("Chat", backref="messages")
-    sender_id = db.Column(db.Integer, nullable=False) # User ID or Vendor ID
+    sender_id = db.Column(db.Integer, nullable=False)
     text = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False) 
 
@@ -125,107 +121,96 @@ class Message(db.Model):
             "chat_id": self.chat_id,
             "sender_id": self.sender_id,
             "text": self.text,
-            "timestamp": self.timestamp.isoformat()  # Format timestamp as ISO 8601 string
+            "timestamp": self.timestamp.isoformat()
         }
 
-# Create all the tables if they don't exist 
 with app.app_context():
     db.create_all()
 
 
 @app.route('/')
+@cache.cached(timeout=300)
 def home():
     products = Product.query.all()
-    return jsonify([product.to_dict() for product in products])
+    return jsonify({"status": "success", "data": [product.to_dict() for product in products]})
 
-# Registration, login, logout) ...
 @app.route('/api/register', methods=["POST"])
 def register():
     data = request.get_json()
-    # extract the data
     email = data.get('email')
     password = data.get('password')
     username = data.get('username')
 
+    if not email or not password or not username:
+        return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
     existing_user = User.query.filter_by(email=email).first()
     if existing_user:
-        return jsonify({"error": "User with this email already exists"}), 409  # Conflict
+        return jsonify({"status": "error", "message": "User with this email already exists"}), 409
 
-
-    hash_and_salted_password = generate_password_hash(
-        password,
-        method='pbkdf2:sha256',
-        salt_length=8
-    )
-    new_user = User(
-        email=email,
-        username=username,
-        password=hash_and_salted_password,
-    )
-    db.session.add(new_user)
-    db.session.commit()
-    login_user(new_user)
-    return jsonify({"message": "Login successful!"}), 200
-
+    hash_and_salted_password = generate_password_hash(password, method='pbkdf2:sha256', salt_length=8)
+    new_user = User(email=email, username=username, password=hash_and_salted_password)
+    
+    try:
+        db.session.add(new_user)
+        db.session.commit()
+        login_user(new_user)
+        return jsonify({"status": "success", "message": "Registration successful!"}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/login', methods=["POST"])
 def login():
     data = request.get_json()
-
     email = data.get('email')
     password = data.get('password')
 
+    if not email or not password:
+        return jsonify({"status": "error", "message": "Missing email or password"}), 400
+
     user = User.query.filter_by(email=email).first()
     if not user or not check_password_hash(user.password, password):
-        return jsonify({"error": "Invalid email or password. Please try again."}), 401 
-    else:
-        login_user(user)
-        access_token = create_access_token(identity=user.id)
-        return jsonify({
-            "message": "Login successful!",
-            "access_token": access_token,
-            "user_id": user.id,
-            "is_vendor": user.is_vendor
-        }), 200
+        return jsonify({"status": "error", "message": "Invalid email or password"}), 401
 
+    login_user(user)
+    access_token = create_access_token(identity=user.id)
+    return jsonify({
+        "status": "success",
+        "message": "Login successful!",
+        "access_token": access_token,
+        "user_id": user.id,
+        "is_full_time_vendor": user.is_full_time_vendor
+    }), 200
 
-@app.route('/logout')
+@app.route('/api/logout')
+@login_required
 def logout():
     logout_user()
-    return redirect(url_for('get_all_posts'))
-
-# Then, in protected routes:
-@app.route('/api/some-protected-route', methods=['GET'])
-@jwt_required()
-def some_protected_route():
-    current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
-    return jsonify({"user_id": user.id})
-
-########################### Products API Endpoints ########################
+    return jsonify({"status": "success", "message": "Logged out successfully"}), 200
 
 @app.route('/api/add-products', methods=['POST'])
-@login_required
+@jwt_required()
 def add_product():
-    
     try:
-        # Get form details
         name = request.form.get('name')
         description = request.form.get('description')
         price = request.form.get('price')
         category = request.form.get('category')
         subcategory = request.form.get('subcategory')
         
-        # Handle image uploads
+        if not name or not description or not price or not category:
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
         image_urls = []
         if 'images' in request.files:
             images = request.files.getlist('images')
             for image in images:
-                result = cloudinary.uploader.upload(image) # Cloudinary upload 
+                result = cloudinary.uploader.upload(image)
                 image_urls.append(result['secure_url'])
 
         new_product = Product(
-            user_id=current_user.id,
+            user_id=get_jwt_identity(),
             name=name,
             description=description,
             price=float(price),
@@ -233,28 +218,27 @@ def add_product():
             category=category,
             subcategory=subcategory
         )
-        
 
         db.session.add(new_product)
         db.session.commit()
 
-        return jsonify({"message": "Product added successfully", "product_id": new_product.id}), 201
+        return jsonify({"status": "success", "message": "Product added successfully", "product_id": new_product.id}), 201
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
-    
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/api/products/trending')
+@cache.cached(timeout=300)
 def get_trending_products():
-    # Placeholder: return some random products as trending
     products = Product.query.order_by(func.random()).limit(10).all()
-    return jsonify({'products': [product.to_dict() for product in products]})
+    return jsonify({"status": "success", "data": [product.to_dict() for product in products]})
 
 @app.route('/api/products/promoted')
+@cache.cached(timeout=300)
 def get_promoted_products():
-    # Placeholder: return some random products as promoted
     products = Product.query.order_by(func.random()).limit(10).all()
-    return jsonify({'products': [product.to_dict() for product in products]})
+    return jsonify({"status": "success", "data": [product.to_dict() for product in products]})
 
 @app.route('/api/products')
 def get_products():
@@ -262,47 +246,54 @@ def get_products():
     per_page = request.args.get('per_page', 20, type=int)
     products = Product.query.paginate(page=page, per_page=per_page, error_out=False)
     return jsonify({
-        'products': [product.to_dict() for product in products.items],
-        'total': products.total,
-        'pages': products.pages,
-        'current_page': products.page
+        "status": "success",
+        "data": {
+            'products': [product.to_dict() for product in products.items],
+            'total': products.total,
+            'pages': products.pages,
+            'current_page': products.page
+        }
     })
 
-@cache.cached(timeout=300)  # Cache for 5 minutes
 @app.route('/api/products/<int:product_id>')
+@cache.cached(timeout=300)
 def get_product(product_id):
     product = Product.query.get(product_id)
     if product:
-        return jsonify(product.to_dict())
+        return jsonify({"status": "success", "data": product.to_dict()})
     else:
-        return jsonify({"error": "Product not found"}), 404
+        return jsonify({"status": "error", "message": "Product not found"}), 404
 
-
-######################### Vendor handling (locations and details)
 @app.route('/api/become-full-time-vendor', methods=['POST'])
-@login_required
+@jwt_required()
 def become_full_time_vendor():
     data = request.json
     business_name = data.get('business_name')
 
     if not business_name:
-        return jsonify({"error": "Business name is required"}), 400
+        return jsonify({"status": "error", "message": "Business name is required"}), 400
 
-    if not current_user.vendor_info:
-        vendor_info = VendorInfo(user_id=current_user.id, business_name=business_name)
+    user = User.query.get(get_jwt_identity())
+    if not user:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+
+    if not user.vendor_info:
+        vendor_info = VendorInfo(user_id=user.id, business_name=business_name)
         db.session.add(vendor_info)
     else:
-        current_user.vendor_info.business_name = business_name
+        user.vendor_info.business_name = business_name
 
-    current_user.is_vendor = True
-    db.session.commit()
-
-    return jsonify({"message": "Successfully registered as a full-time vendor"}), 200
-
+    user.is_full_time_vendor = True
+    
+    try:
+        db.session.commit()
+        return jsonify({"status": "success", "message": "Successfully registered as a full-time vendor"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/vendors/locations')
 def get_vendor_locations():
-    # Query for users who have posted products
     users_with_products = db.session.query(User).join(Product).filter(Product.user_id == User.id).distinct().all()
 
     vendor_locations = []
@@ -314,7 +305,7 @@ def get_vendor_locations():
                 'name': product.name,
                 'category': product.category,
                 'price': float(product.price),
-                'image': product.images[0] if product.images else None  # Assuming images is a list
+                'image': product.images[0] if product.images else None
             })
 
         vendor_info = {
@@ -327,18 +318,20 @@ def get_vendor_locations():
         }
         vendor_locations.append(vendor_info)
 
-    return jsonify(vendor_locations)
-   
+    return jsonify({"status": "success", "data": vendor_locations})
 
 @app.route('/api/vendors/<int:user_id>')
 def get_vendor(user_id):
     user = User.query.get(user_id)
     if user:
         return jsonify({
-            'id': user.id,
-            'username': user.username,
-            'is_full_time_vendor': user.is_full_time_vendor,
-            'business_name': user.vendor_info.business_name if user.is_full_time_vendor else None
+            "status": "success",
+            "data": {
+                'id': user.id,
+                'username': user.username,
+                'is_full_time_vendor': user.is_full_time_vendor,
+                'business_name': user.vendor_info.business_name if user.is_full_time_vendor else None
+            }
         })
     else:
         return jsonify({"error": "User not found"}), 404
@@ -347,43 +340,47 @@ def get_vendor(user_id):
 
 
 @app.route('/api/chats', methods=['POST'])
-@login_required
+@jwt_required()
 def create_chat():
     data = request.json
     if not data or 'other_user_id' not in data:
-        return jsonify({"error": "Missing required fields"}), 400
+        return jsonify({"status": "error", "message": "Missing required fields"}), 400
 
     other_user_id = data['other_user_id']
+    current_user_id = get_jwt_identity()
 
-    # Check if the other user exists
     other_user = User.query.get(other_user_id)
     if not other_user:
-        return jsonify({"error": "User not found"}), 404
+        return jsonify({"status": "error", "message": "User not found"}), 404
 
-    # Check if a chat already exists between the current user and the other user
     existing_chat = Chat.query.filter(
-        ((Chat.user1_id == current_user.id) & (Chat.user2_id == other_user_id)) |
-        ((Chat.user1_id == other_user_id) & (Chat.user2_id == current_user.id))
+        ((Chat.user1_id == current_user_id) & (Chat.user2_id == other_user_id)) |
+        ((Chat.user1_id == other_user_id) & (Chat.user2_id == current_user_id))
     ).first()
 
     if existing_chat:
-        return jsonify({"chat_id": existing_chat.id, "message": "Chat already exists"}), 200
+        return jsonify({"status": "success", "chat_id": existing_chat.id, "message": "Chat already exists"}), 200
 
-    new_chat = Chat(user1_id=current_user.id, user2_id=other_user_id)
-    db.session.add(new_chat)
-    db.session.commit()
-    return jsonify({"chat_id": new_chat.id}), 201
+    new_chat = Chat(user1_id=current_user_id, user2_id=other_user_id)
+    try:
+        db.session.add(new_chat)
+        db.session.commit()
+        return jsonify({"status": "success", "chat_id": new_chat.id}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/get-chats', methods=['GET'])
-@login_required
+@jwt_required()
 def get_user_chats():
+    current_user_id = get_jwt_identity()
     user_chats = Chat.query.filter(
-        (Chat.user1_id == current_user.id) | (Chat.user2_id == current_user.id)
+        (Chat.user1_id == current_user_id) | (Chat.user2_id == current_user_id)
     ).all()
     
     chat_list = []
     for chat in user_chats:
-        other_user = chat.user2 if chat.user1_id == current_user.id else chat.user1
+        other_user = chat.user2 if chat.user1_id == current_user_id else chat.user1
         last_message = Message.query.filter_by(chat_id=chat.id).order_by(Message.timestamp.desc()).first()
         
         chat_info = {
@@ -395,35 +392,37 @@ def get_user_chats():
         }
         chat_list.append(chat_info)
     
-    return jsonify(chat_list)
+    return jsonify({"status": "success", "data": chat_list})
 
 @app.route('/api/chats/<int:chat_id>/messages', methods=['GET'])
-@login_required
+@jwt_required()
 def get_messages(chat_id):
     try:
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 20, type=int)
         
+        current_user_id = get_jwt_identity()
         chat = Chat.query.get(chat_id)
         if not chat:
-            return jsonify({"error": "Chat not found"}), 404
+            return jsonify({"status": "error", "message": "Chat not found"}), 404
 
-        if current_user.id != chat.user1_id and current_user.id != chat.user2_id:
-            return jsonify({"error": "Unauthorized access"}), 403
+        if current_user_id != chat.user1_id and current_user_id != chat.user2_id:
+            return jsonify({"status": "error", "message": "Unauthorized access"}), 403
 
         messages = Message.query.filter_by(chat_id=chat_id).order_by(Message.timestamp.desc()).paginate(page=page, per_page=per_page)
         
         return jsonify({
-            'messages': [message.to_dict() for message in messages.items],
-            'total': messages.total,
-            'pages': messages.pages,
-            'current_page': messages.page
+            "status": "success",
+            "data": {
+                'messages': [message.to_dict() for message in messages.items],
+                'total': messages.total,
+                'pages': messages.pages,
+                'current_page': messages.page
+            }
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-
-# Socket.IO events
 @socketio.on('join')
 def on_join(data):
     room = data['chatId']
@@ -443,12 +442,11 @@ def handle_message(data):
         sender_id = data['userId']
         text = data['text']
 
-        # Validate the chat and sender
         chat = Chat.query.get(chat_id)
         if not chat:
             raise ValueError("Chat not found")
 
-        if sender_id != chat.user_id and sender_id != chat.vendor_id:
+        if sender_id != chat.user1_id and sender_id != chat.user2_id:
             raise ValueError("Invalid sender")
 
         new_message = Message(chat_id=chat_id, sender_id=sender_id, text=text)
@@ -459,7 +457,6 @@ def handle_message(data):
     except Exception as e:
         db.session.rollback()
         emit('error', {'message': str(e)}, room=request.sid)
-
 
 if __name__ == "__main__":
     socketio.run(app, debug=True)

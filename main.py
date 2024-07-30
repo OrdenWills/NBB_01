@@ -155,7 +155,13 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         login_user(new_user)
-        return jsonify({"status": "success", "message": "Registration successful!"}), 201
+        access_token = create_access_token(identity=new_user.id)
+        return jsonify({
+            "status": "success",
+            "message": "Registration successful!",
+            "access_token": access_token,
+            "user_id": new_user.id,
+            }), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500

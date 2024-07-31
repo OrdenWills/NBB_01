@@ -226,7 +226,7 @@ def validate_remember_token():
         }), 200
     return jsonify({"status": "error", "message": "Invalid or expired token"}), 401
 
-@app.route('/api/logout')
+@app.route('/api/logout', methods=['POST'])
 @login_required
 def logout():
     logout_user()

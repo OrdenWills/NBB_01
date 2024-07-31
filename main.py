@@ -1,3 +1,4 @@
+## Flask related imports
 from flask import Flask, render_template, request, jsonify, redirect, url_for, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
@@ -10,10 +11,11 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from sqlalchemy import func
 from sqlalchemy.orm import relationship
 import os
+import secrets
 
 import cloudinary
 import cloudinary.uploader
-from datetime import datetime
+from datetime import datetime, timedelta
 # import dotenv
 
 # dotenv.load_dotenv('keys.env')
@@ -63,6 +65,8 @@ class User(UserMixin, db.Model):
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     is_full_time_vendor = db.Column(db.Boolean, default=False)
+    remember_token = db.Column(db.String(100), unique=True, nullable=True)
+    remember_token_expires_at = db.Column(db.DateTime, nullable=True)
     products = relationship("Product", back_populates="user", cascade="all, delete-orphan")
     vendor_info = relationship("VendorInfo", uselist=False, back_populates="user", cascade="all, delete-orphan")
 
@@ -128,6 +132,7 @@ with app.app_context():
     db.create_all()
 
 
+
 @app.route('/')
 @cache.cached(timeout=300)
 def home():
@@ -166,11 +171,15 @@ def register():
         db.session.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
 
+def generate_remember_token():
+    return secrets.token_urlsafe(64)  # Generates a secure random token
+
 @app.route('/api/login', methods=["POST"])
 def login():
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
+    remember_me = data.get('remember_me', False)
 
     if not email or not password:
         return jsonify({"status": "error", "message": "Missing email or password"}), 400
@@ -181,13 +190,41 @@ def login():
 
     login_user(user)
     access_token = create_access_token(identity=user.id)
-    return jsonify({
+
+    response_data = {
         "status": "success",
         "message": "Login successful!",
         "access_token": access_token,
         "user_id": user.id,
         "is_full_time_vendor": user.is_full_time_vendor
-    }), 200
+    }
+
+    if remember_me:
+        remember_token = generate_remember_token()
+        user.remember_token = remember_token
+        user.remember_token_expires_at = datetime.utcnow() + timedelta(days=30)  # Expire after 30 days
+        db.session.commit()
+        response_data["remember_token"] = remember_token
+
+    return jsonify(response_data), 200
+
+# Add a new route to validate remember token:
+@app.route('/api/validate-remember-token', methods=["POST"])
+def validate_remember_token():
+    data = request.get_json()
+    remember_token = data.get('remember_token')
+    user = User.query.filter_by(remember_token=remember_token).first()
+    if user and user.remember_token_expires_at > datetime.utcnow():
+        login_user(user)
+        access_token = create_access_token(identity=user.id)
+        return jsonify({
+            "status": "success",
+            "message": "Login successful!",
+            "access_token": access_token,
+            "user_id": user.id,
+            "is_full_time_vendor": user.is_full_time_vendor
+        }), 200
+    return jsonify({"status": "error", "message": "Invalid or expired token"}), 401
 
 @app.route('/api/logout')
 @login_required

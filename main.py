@@ -34,7 +34,7 @@ db = SQLAlchemy(app)
 CORS(app)
 
 # Socketio
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 # Caching
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
@@ -101,7 +101,7 @@ class Product(db.Model):
             'images': self.images,
             'category': self.category,
             'seller_type': 'Vendor' if self.user.is_full_time_vendor else 'Individual',
-            'business_name': self.user.vendor_info.business_name if self.user.is_full_time_vendor else None
+            'business_name': self.user.vendor_info.business_name if self.user.is_full_time_vendor else self.user.username
         }
 
 class Chat(db.Model):
@@ -305,10 +305,13 @@ def get_products():
 def get_product(product_id):
     product = Product.query.get(product_id)
     if product:
-        return jsonify({"status": "success", "data": product.to_dict()})
+        product_dict = product.to_dict()
+        product_dict['user_id'] = product.user_id
+        product_dict['seller_name'] = product.user.username if product.user else "Unknown"
+        return jsonify({"status": "success", "data": product_dict})
     else:
         return jsonify({"status": "error", "message": "Product not found"}), 404
-
+    
 @app.route('/api/become-full-time-vendor', methods=['POST'])
 @jwt_required()
 def become_full_time_vendor():

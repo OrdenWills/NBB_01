@@ -34,7 +34,7 @@ db = SQLAlchemy(app)
 CORS(app)
 
 # Socketio
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Caching
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})

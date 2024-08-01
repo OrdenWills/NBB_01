@@ -75,6 +75,8 @@ class VendorInfo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True)
     business_name = db.Column(db.String(255))
+    cover_photo = db.Column(db.String(255))
+    profile_photo = db.Column(db.String(255))
     user = relationship("User", back_populates="vendor_info")
 
 class Product(db.Model):
@@ -319,18 +321,64 @@ def become_full_time_vendor():
     user = User.query.get(get_jwt_identity())
     if not user:
         return jsonify({"status": "error", "message": "User not found"}), 404
+    
+    cover_photo = request.files.get('coverPhoto')
+    profile_photo = request.files.get('profilePhoto')
+
+    cover_photo_url = None
+    profile_photo_url = None
+
+    if cover_photo:
+        cover_photo_result = cloudinary.uploader.upload(cover_photo)
+        cover_photo_url = cover_photo_result['secure_url']
+
+    if profile_photo:
+        profile_photo_result = cloudinary.uploader.upload(profile_photo)
+        profile_photo_url = profile_photo_result['secure_url']
 
     if not user.vendor_info:
-        vendor_info = VendorInfo(user_id=user.id, business_name=business_name)
+        vendor_info = VendorInfo(
+            user_id=user.id, 
+            business_name=business_name,
+            cover_photo = cover_photo_url,
+            profile_photo=profile_photo_url)
         db.session.add(vendor_info)
     else:
         user.vendor_info.business_name = business_name
+        user.vendor_info.cover_photo = cover_photo_url
+        user.vendor_info.profile_photo = profile_photo_url
+
 
     user.is_full_time_vendor = True
     
     try:
         db.session.commit()
         return jsonify({"status": "success", "message": "Successfully registered as a full-time vendor"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/update-location', methods=['PUT'])
+@jwt_required()
+def update_location():
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+
+    data = request.get_json()
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+
+    if latitude is None or longitude is None:
+        return jsonify({"status": "error", "message": "Missing latitude or longitude"}), 400
+
+    user.latitude = float(latitude)
+    user.longitude = float(longitude)
+
+    try:
+        db.session.commit()
+        return jsonify({"status": "success", "message": "Location updated successfully"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -355,7 +403,7 @@ def get_vendor_locations():
             'id': user.id,
             'latitude': user.latitude,
             'longitude': user.longitude,
-            'name': user.vendor_info.business_name if user.is_full_time_vendor else "Individual",
+            'name': user.vendor_info.business_name if user.is_full_time_vendor else user.username,
             'is_full_time_vendor': user.is_full_time_vendor,
             'products': products_info
         }

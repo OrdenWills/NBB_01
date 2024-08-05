@@ -433,16 +433,38 @@ def get_vendor(user_id):
 # Chat API Endpoints
 
 
-@app.route('/api/chats', methods=['POST'])
+@app.route('/api/chats', methods=['POST', 'GET'])
 @jwt_required()
-def create_chat():
-    data = request.json
-    if not data or 'other_user_id' not in data:
-        return jsonify({"status": "error", "message": "Missing required fields"}), 400
-
-    other_user_id = data['other_user_id']
+def handle_chat():
     current_user_id = get_jwt_identity()
 
+    if request.method == 'POST':
+        # Create a new chat or get existing chat
+        data = request.json
+        if not data or 'other_user_id' not in data:
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
+        other_user_id = data['other_user_id']
+    elif request.method == 'GET':
+        # Get all chats for the current user
+        user_chats = Chat.query.filter(
+            (Chat.user1_id == current_user_id) | (Chat.user2_id == current_user_id)
+        ).all()
+        
+        chat_list = []
+        for chat in user_chats:
+            other_user = chat.user2 if chat.user1_id == current_user_id else chat.user1
+            last_message = Message.query.filter_by(chat_id=chat.id).order_by(Message.timestamp.desc()).first()
+            chat_info = {
+                'chat_id': chat.id,
+                'other_user_id': other_user.id,
+                'other_user_name': other_user.username,
+                'last_message': last_message.text if last_message else '',
+                'last_message_time': last_message.timestamp.isoformat() if last_message else None
+            }
+            chat_list.append(chat_info)
+        return jsonify({"status": "success", "data": chat_list})
+
+    # Common code for POST request and checking existing chat
     other_user = User.query.get(other_user_id)
     if not other_user:
         return jsonify({"status": "error", "message": "User not found"}), 404
@@ -455,6 +477,7 @@ def create_chat():
     if existing_chat:
         return jsonify({"status": "success", "chat_id": existing_chat.id, "message": "Chat already exists"}), 200
 
+    # Create new chat if it doesn't exist (only for POST request)
     new_chat = Chat(user1_id=current_user_id, user2_id=other_user_id)
     try:
         db.session.add(new_chat)
@@ -463,30 +486,6 @@ def create_chat():
     except Exception as e:
         db.session.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/api/get-chats', methods=['GET'])
-@jwt_required()
-def get_user_chats():
-    current_user_id = get_jwt_identity()
-    user_chats = Chat.query.filter(
-        (Chat.user1_id == current_user_id) | (Chat.user2_id == current_user_id)
-    ).all()
-    
-    chat_list = []
-    for chat in user_chats:
-        other_user = chat.user2 if chat.user1_id == current_user_id else chat.user1
-        last_message = Message.query.filter_by(chat_id=chat.id).order_by(Message.timestamp.desc()).first()
-        
-        chat_info = {
-            'chat_id': chat.id,
-            'other_user_id': other_user.id,
-            'other_user_name': other_user.username,
-            'last_message': last_message.text if last_message else '',
-            'last_message_time': last_message.timestamp.isoformat() if last_message else None
-        }
-        chat_list.append(chat_info)
-    
-    return jsonify({"status": "success", "data": chat_list})
 
 @app.route('/api/chats/<int:chat_id>/messages', methods=['GET'])
 @jwt_required()

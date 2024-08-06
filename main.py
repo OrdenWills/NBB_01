@@ -16,9 +16,9 @@ import secrets
 import cloudinary
 import cloudinary.uploader
 from datetime import datetime, timedelta
-import dotenv
+# import dotenv
 
-dotenv.load_dotenv('keys.env')
+# dotenv.load_dotenv('keys.env')
 
 app = Flask(__name__)
 

@@ -8,6 +8,7 @@ Flask-Caching
 Flask-SocketIO
 cloudinary
 gunicorn
-cloudinary
 Werkzeug
 Flask-JWT-Extended
+gevent
+gevent-websocket

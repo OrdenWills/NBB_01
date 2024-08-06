@@ -1,5 +1,5 @@
 ## Flask related imports
-from flask import Flask, render_template, request, jsonify, redirect, url_for, abort
+from flask import Flask, request, jsonify, redirect, url_for, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -16,9 +16,9 @@ import secrets
 import cloudinary
 import cloudinary.uploader
 from datetime import datetime, timedelta
-# import dotenv
+import dotenv
 
-# dotenv.load_dotenv('keys.env')
+dotenv.load_dotenv('keys.env')
 
 app = Flask(__name__)
 

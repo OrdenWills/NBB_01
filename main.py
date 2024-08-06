@@ -1,3 +1,5 @@
+from gevent import monkey
+monkey.patch_all()
 ## Flask related imports
 from flask import Flask, request, jsonify, redirect, url_for, abort
 from flask_sqlalchemy import SQLAlchemy
